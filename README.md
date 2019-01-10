@@ -8,7 +8,8 @@ Sprout is a Modern Indoor Planter which automatically waters your plants, herbs,
 [Instructables](https://www.instructables.com/id/Sprout-Modern-Indoor-Self-Watering-Planter/)
 
 **Order PCB:** 
-[PCBWay](https://www.pcbway.com/project/shareproject/Arduino_Automatic_Plant_Watering_System.html)
+[PCBWay- Automatic Plant Watering System using Arduino](https://www.pcbway.com/project/shareproject/Arduino_Automatic_Plant_Watering_System.html)
+
 Select the Solder Mask as "Green" to get 5 PCB's for $5.
 
 ## Contributing
