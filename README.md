@@ -1,4 +1,4 @@
-# Automatic-Plant-Watering-System-using-Arduino
+# Automatic Plant Watering System using Arduino
 Sprout is a Modern Indoor Planter which automatically waters your plants, herbs, vegetables, etc and will revolutionize your gardening game.
 
 **Full Video:**
