@@ -61,12 +61,16 @@ class Pump {
   unsigned long  pulse_time_ms ;
   unsigned long pump_start_ms ;
   unsigned long pump_stop_ms ;
+  unsigned long last_millis_ms ;    // used in case of millis rollover
   bool pump_on ;
   bool timeout_triggered ; 
 
   unsigned long elapsed_start_time_ms ;
   unsigned long run_time_ms ;
   unsigned int run_count ;
+  unsigned int rollover_count ;
+
+  unsigned long safeMillis() ;
 
   public:
   Pump(int p, int l, unsigned long, unsigned long b_ms) ;
@@ -75,6 +79,7 @@ class Pump {
   unsigned long getElapsedTimeSec() ;
   unsigned long getRunTimeSec() ;
   unsigned int getRunCount() ;
+  unsigned int getRolloverCount() ;
   bool isPumpRunning() ;
   bool isTimeoutFlagSet() ;
  
@@ -161,6 +166,7 @@ void loop()  {
         break ;
         
       case CHECK_MOISTURE :
+        unsigned long lastStopMS ;
         btSerial.println("----------------------") ;
         ml = moisture.getMoistLevel() ;
         btSerial.print("Moisture Level: ") ;
@@ -170,19 +176,27 @@ void loop()  {
         btSerial.println(" ") ;
         btSerial.print("Time since start/reset: ") ;
         btSerial.print(pump.getElapsedTimeSec()/60) ;
-        btSerial.println(" min") ;
+        btSerial.print(" min and ") ;
+        btSerial.print(pump.getRolloverCount()) ;
+        btSerial.println(" clock rollovers") ;
         btSerial.print("# times pump has run: ") ;
         btSerial.println(pump.getRunCount()) ;
         btSerial.print("Pump running time: ") ;
         btSerial.print(pump.getRunTimeSec()) ;
         btSerial.println(" sec") ;
         btSerial.print("Pump time since last stop: ") ;
-        btSerial.print(pump.getTimeSinceLastStopSec()) ;
+        lastStopMS = pump.getTimeSinceLastStopSec() ;
+        btSerial.print(lastStopMS) ;
         btSerial.println(" sec") ;
         if (pump.isPumpRunning())
           btSerial.println("*** Pump is running ***") ;  
         if (pump.isTimeoutFlagSet())
           btSerial.println("*** Pump is in timeout mode ***") ;  
+        if (lastStopMS < POST_TRIGGER_PAUSE_SEC ) {
+          btSerial.print("*** Moisture sensor offline for ") ;      
+          btSerial.print (POST_TRIGGER_PAUSE_SEC - lastStopMS) ;
+          btSerial.println (" more sec ***") ;
+        }
         btSerial.println("----------------------") ;
        break ;
 
@@ -327,13 +341,27 @@ Pump::Pump(int p_pin, int l_pin, unsigned long p_time_ms, unsigned long b_min ) 
   digitalWrite(pump_pin,0) ;
   digitalWrite(led_pin,0) ;
 
-  pump_start_ms = pump_stop_ms = elapsed_start_time_ms = millis() ;
+  pump_start_ms = pump_stop_ms = elapsed_start_time_ms = last_millis_ms = millis() ;
   run_time_ms = 0 ;
   run_count = 0 ;
+  rollover_count = 0 ;
 
   pump_start_ms = pump_stop_ms = 0 ;
   pump_on = false ;
   timeout_triggered = false ;
+}
+
+// Gracefully handle millis() rollover
+unsigned long Pump::safeMillis() {
+   unsigned long current_ms = millis() ;
+   if (current_ms < last_millis_ms) {
+      pump_start_ms = pump_stop_ms = elapsed_start_time_ms = last_millis_ms = current_ms ;
+      rollover_count ++ ;
+   }
+   else  {
+     last_millis_ms = current_ms ;
+     return last_millis_ms ;
+   }
 }
 
 bool Pump::isTimeoutFlagSet() {
@@ -341,7 +369,7 @@ bool Pump::isTimeoutFlagSet() {
 }
 
 unsigned long Pump::getElapsedTimeSec() {
-  return ((millis() - elapsed_start_time_ms)/1000) ;
+  return ((safeMillis() - elapsed_start_time_ms)/1000) ;
 }
 
 unsigned long Pump::getRunTimeSec() {
@@ -351,11 +379,14 @@ unsigned long Pump::getRunTimeSec() {
 unsigned int Pump::getRunCount() {
    return run_count ;
 }
+unsigned int Pump::getRolloverCount() {
+   return rollover_count ;
+}
 bool Pump::isPumpRunning() {  // Returns true if pump is currently running
     return pump_on ;
 }
 unsigned long Pump::getTimeSinceLastStopSec() {
-  return ((millis() - pump_stop_ms)/1000) ;
+  return ((safeMillis() - pump_stop_ms)/1000) ;
 }
 void Pump::PumpOff() {
   // Whether pump running flag is on or not, force pump stop
@@ -364,7 +395,7 @@ void Pump::PumpOff() {
   digitalWrite(led_pin,0) ;
   timeout_triggered = false ;   // reset timeout flag
   if (pump_on) {
-    pump_stop_ms = millis() ;     // log when pump was stopped
+    pump_stop_ms = safeMillis() ;     // log when pump was stopped
     run_time_ms += (pump_stop_ms - pump_start_ms) ;
     pump_on = false ;
   }
@@ -376,11 +407,11 @@ void Pump::PumpOn() {
     pump_on = true ;
     run_count++ ;
 
-    unsigned long time_since_last_stop = millis() - pump_stop_ms ;
+    unsigned long time_since_last_stop = safeMillis() - pump_stop_ms ;
     if (time_since_last_stop > 100)          // If sufficient pause since last cycle
-      pump_start_ms = millis() ;             // reset the start counter
+      pump_start_ms = safeMillis() ;             // reset the start counter
     else                                     // OW, don't reset and treat as one long run
-      run_time_ms -= (millis() - pump_start_ms);  // But adjust runtime clock.
+      run_time_ms -= (safeMillis() - pump_start_ms);  // But adjust runtime clock.
   }
 }
 void Pump::PumpPulse(unsigned long override_pulse_ms)  {
@@ -398,7 +429,7 @@ void Pump::PumpPulse(unsigned long override_pulse_ms)  {
 // if pump is on and has been running more than "burnout" minutes
 // turn it off
 bool Pump::PumpCheck() {
-  if (! timeout_triggered && pump_on && ((millis() - pump_start_ms) >= burnout_time_ms)) {
+  if (! timeout_triggered && pump_on && ((safeMillis() - pump_start_ms) >= burnout_time_ms)) {
     PumpOff() ;
     timeout_triggered = true ;
     return (true) ;
@@ -410,7 +441,7 @@ void Pump::PumpReset() {        // Pump Off does all the functions needed.
   // reset statistics and turn off pump
   // (Turning off pump will reset the timeout flag.
   PumpOff() ;
-  elapsed_start_time_ms = millis() ;
+  elapsed_start_time_ms = safeMillis() ;
   run_time_ms = 0 ;
   run_count = 0 ;
 }
