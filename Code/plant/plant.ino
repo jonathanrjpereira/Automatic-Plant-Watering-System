@@ -3,11 +3,11 @@
 
 
 // *********** Pin settings ***********
-#define MOISTURE_SENSOR_PIN A0
-#define TX_PIN               3
-#define RX_PIN               2
-#define PUMP_CONTROLLER_PIN 13
-#define LED_PIN             11
+#define MOISTURE_SENSOR_PIN A6
+#define TX_PIN               6        // Connect to BT Rx 5
+#define RX_PIN               4        // Connect to BT Tx 3
+#define PUMP_CONTROLLER_PIN 12
+#define LED_PIN              8
 
 // *********** CONTROL CONSTANTS ***********
 #define PUMP_ON 1
@@ -20,16 +20,17 @@
 
 // ********** CUSTOMIZATION VALUES *********
 // Moisture control values
-#define INITIAL_MOISTURE_TRIGGER 2000   // Set initial trigger v. high
+#define INITIAL_MOISTURE_TRIGGER 500    // Set initial trigger v. high
 #define LOWER_MOISTURE_LIMIT  100       
-#define UPPER_MOISTURE_LIMIT 650 
+#define UPPER_MOISTURE_LIMIT 1050       // Max dry is usually 1024 
 
 // Pump values
 #define PUMP_PULSE_TIME_MS 1500       // Pulse for 1.5 sec
 #define PUMP_BURNOUT_TIME_MS 10000    // Don't let pump run longer than 10 sec
 
 // Control loop values
-#define POST_TRIGGER_PAUSE_SEC 3600   // After dryness trigger, wait 1 hour 
+#define POST_TRIGGER_PAUSE_SEC 300    // Pause 5 min after last pump stop 
+                                      // before auto trigger (let moisture settle)
 
 
 // *********** Class Headers ***********
@@ -43,6 +44,7 @@ class MoistureSensor {
 
   public:
   MoistureSensor(int pin, int limit) ;
+  void setup() ;
   bool tooDry() ;
   bool tooMoist() ;
   int setLimit(int l) ;
@@ -83,11 +85,12 @@ class Pump {
   bool isPumpRunning() ;
   bool isTimeoutFlagSet() ;
  
-  void PumpOn() ;
-  void PumpOff() ;
-  void PumpReset() ;
-  void PumpPulse(unsigned long override_pulse_ms = 0) ;  // Pulse pump on/off
-  bool PumpCheck() ;                            // Turn off before burnout
+  void setup() ;
+  void reset() ;
+  void pumpOn() ;
+  void pumpOff() ;
+  void pumpPulse(unsigned long override_pulse_ms = 0) ;  // Pulse pump on/off
+  bool pumpCheck() ;                            // Turn off before burnout
 } ;
 
 
@@ -103,13 +106,18 @@ int buffer ;                    // buffer for serial port
 // *********** Setup ***********
 void setup()
 {
-  // set up pins
+  // Setup pump object
+  pump.setup() ;
+ 
+  // Moisture sensor object
+  moisture.setup() ;
+
+  // Serial port object
   pinMode(RX_PIN, INPUT) ;
   pinMode(TX_PIN, OUTPUT) ;
-  pinMode(LED_PIN, OUTPUT) ;
-
-  // Set data rate for the SoftwareSerial port
   btSerial.begin(9600);                 // open serial port, set dr
+
+  // All done
   btSerial.println("Setup complete.");
 }
 
@@ -123,7 +131,7 @@ void setup()
 void loop()  {
 
   // 1. Check that pump has not been running itself too long
-  if (pump.PumpCheck())    {             // Burnout protection
+  if (pump.pumpCheck())    {             // Burnout protection
     btSerial.println("PumpCheck Timeout");
     return ;
   }
@@ -142,13 +150,13 @@ void loop()  {
           btSerial.println("*** Pump is in timeout mode ***") ;  
         else { 
           btSerial.println("Pump ON") ;
-          pump.PumpOn() ;
+          pump.pumpOn() ;
         }
         break ;
 
       case PUMP_OFF :
         btSerial.println("Pump OFF") ;
-        pump.PumpOff() ;
+        pump.pumpOff() ;
         break ;
 
       case PUMP_PULSE :
@@ -156,13 +164,13 @@ void loop()  {
           btSerial.println("*** Pump is in timeout mode ***") ;  
         else { 
           btSerial.println("Pump PULSE") ;
-          pump.PumpPulse() ;
+          pump.pumpPulse() ;
         }
         break ;
 
       case PUMP_RESET_TIMEOUT :
         btSerial.println("Pump RESET") ;
-        pump.PumpReset() ;
+        pump.reset() ;
         break ;
         
       case CHECK_MOISTURE :
@@ -238,7 +246,7 @@ void loop()  {
       btSerial.print(pump.getTimeSinceLastStopSec()) ;
       btSerial.println(" sec") ;
       btSerial.println("----------------------") ;
-      pump.PumpPulse() ;
+      pump.pumpPulse() ;
     }
   }
 
@@ -253,8 +261,6 @@ int readBluetooth()  {
       int buf ;
 
       buf = btSerial.read();
-//    btSerial.print("Bluetooth: ");
-//    btSerial.println(buf);
 
       switch (buf) {
         case 49 :             // Ascii 1
@@ -294,6 +300,8 @@ int readBluetooth()  {
 MoistureSensor::MoistureSensor(int pin, int limit ) {
   moist_limit = limit ;
   moist_sensor_pin = pin ;
+}
+void MoistureSensor::setup() {
   pinMode(moist_sensor_pin, INPUT) ;
 }
 bool MoistureSensor::tooDry() {
@@ -335,20 +343,6 @@ Pump::Pump(int p_pin, int l_pin, unsigned long p_time_ms, unsigned long b_min ) 
   led_pin = l_pin ;
   pulse_time_ms = p_time_ms ;
   burnout_time_ms = b_min ;
-
-  pinMode(pump_pin, OUTPUT) ;
-  pinMode(led_pin, OUTPUT) ;
-  digitalWrite(pump_pin,0) ;
-  digitalWrite(led_pin,0) ;
-
-  pump_start_ms = pump_stop_ms = elapsed_start_time_ms = last_millis_ms = millis() ;
-  run_time_ms = 0 ;
-  run_count = 0 ;
-  rollover_count = 0 ;
-
-  pump_start_ms = pump_stop_ms = 0 ;
-  pump_on = false ;
-  timeout_triggered = false ;
 }
 
 // Gracefully handle millis() rollover
@@ -388,7 +382,7 @@ bool Pump::isPumpRunning() {  // Returns true if pump is currently running
 unsigned long Pump::getTimeSinceLastStopSec() {
   return ((safeMillis() - pump_stop_ms)/1000) ;
 }
-void Pump::PumpOff() {
+void Pump::pumpOff() {
   // Whether pump running flag is on or not, force pump stop
   // and reset trigger flag
   digitalWrite(pump_pin,0) ;
@@ -400,7 +394,26 @@ void Pump::PumpOff() {
     pump_on = false ;
   }
 }
-void Pump::PumpOn() {
+
+void Pump::setup() {
+
+  pinMode(pump_pin, OUTPUT) ;
+  pinMode(led_pin, OUTPUT) ;
+  digitalWrite(pump_pin,0) ;
+  digitalWrite(led_pin,0) ;
+
+  pump_start_ms = pump_stop_ms = elapsed_start_time_ms = last_millis_ms = millis() ;
+  run_time_ms = 0 ;
+  run_count = 0 ;
+  rollover_count = 0 ;
+
+  pump_start_ms = pump_stop_ms = 0 ;
+  pump_on = false ;
+  timeout_triggered = false ;
+  
+}
+
+void Pump::pumpOn() {
   if (! pump_on && ! timeout_triggered) {    // No pump, if it's already on or in timeout
     digitalWrite(pump_pin, 1) ;
     digitalWrite(led_pin,1) ;
@@ -414,33 +427,33 @@ void Pump::PumpOn() {
       run_time_ms -= (safeMillis() - pump_start_ms);  // But adjust runtime clock.
   }
 }
-void Pump::PumpPulse(unsigned long override_pulse_ms)  {
+void Pump::pumpPulse(unsigned long override_pulse_ms)  {
   unsigned long p ;
   if (override_pulse_ms == 0) p = pulse_time_ms ;
   else p = override_pulse_ms ;
 
   if (! timeout_triggered) {
-    PumpOn() ;
+    pumpOn() ;
     delay(p) ;
-    if (! PumpCheck() )
-      PumpOff() ;
+    if (! pumpCheck() )
+      pumpOff() ;
   }
 }
 // if pump is on and has been running more than "burnout" minutes
 // turn it off
-bool Pump::PumpCheck() {
+bool Pump::pumpCheck() {
   if (! timeout_triggered && pump_on && ((safeMillis() - pump_start_ms) >= burnout_time_ms)) {
-    PumpOff() ;
+    pumpOff() ;
     timeout_triggered = true ;
     return (true) ;
   }
   else
     return false ;
 }
-void Pump::PumpReset() {        // Pump Off does all the functions needed.
+void Pump::reset() {        // Pump Off does all the functions needed.
   // reset statistics and turn off pump
   // (Turning off pump will reset the timeout flag.
-  PumpOff() ;
+  pumpOff() ;
   elapsed_start_time_ms = safeMillis() ;
   run_time_ms = 0 ;
   run_count = 0 ;
