@@ -25,7 +25,7 @@
 #define UPPER_MOISTURE_LIMIT 1050       // Max dry is usually 1024 
 
 // Pump values
-#define PUMP_RESEVOIR_CAPACITY 18000  // Resevoir runs dry after 18 seconds
+#define PUMP_RESEVOIR_CAPACITY_MS 900000 // Resevoir runs dry after 90 seconds
 #define PUMP_PULSE_TIME_MS 1500       // Pulse for 1.5 sec
 
 // Control loop values
@@ -95,7 +95,7 @@ class Pump {
 
 // *********** Globals ***********
 MoistureSensor moisture(MOISTURE_SENSOR_PIN, INITIAL_MOISTURE_TRIGGER) ;
-Pump pump(PUMP_CONTROLLER_PIN, LED_PIN, PUMP_RESEVOIR_CAPACITY, PUMP_PULSE_TIME_MS) ;
+Pump pump(PUMP_CONTROLLER_PIN, LED_PIN, PUMP_RESEVOIR_CAPACITY_MS, PUMP_PULSE_TIME_MS) ;
 SoftwareSerial btSerial(RX_PIN, TX_PIN) ;
 byte pinState = 0 ;
 int buffer ;                    // buffer for serial port
@@ -182,34 +182,53 @@ void loop()  {
         break ;
         
       case CHECK_MOISTURE :
-        unsigned long lastStopMS ;
+        unsigned long elapsed_time_sec, last_run_sec ;
+        
         btSerial.println("----------------------") ;
         ml = moisture.readMoistLevel() ;
         btSerial.print("Moisture Level: ") ;
         btSerial.println(ml);
+
         btSerial.print("Moisture Limit: ");
         btSerial.println(moisture.getLimit());
         btSerial.println(" ") ;
+        
         btSerial.print("Time since start/reset: ") ;
-        btSerial.print(pump.getElapsedTimeSec()/60) ;
+        elapsed_time_sec = pump.getElapsedTimeSec() ;
+        btSerial.print(elapsed_time_sec / 86400) ;
+        btSerial.print(" days, ") ;
+        btSerial.print( (elapsed_time_sec % 86400) / 3600 ) ;
+        btSerial.print(" hours, ") ;
+        btSerial.print( ((elapsed_time_sec % 86400) % 3600 ) / 60) ;
         btSerial.println(" min") ;
+
         btSerial.print("# times pump has run: ") ;
-        btSerial.println(pump.getRunCount()) ;
+        btSerial.print(pump.getRunCount()) ;
+        btSerial.println(" times") ;
+       
         btSerial.print("Pump running time: ") ;
         btSerial.print(pump.getRunTimeSec()) ;
         btSerial.println(" sec") ;
+        
         btSerial.print("Pump time since last stop: ") ;
-        lastStopMS = pump.getTimeSinceLastStopSec() ;
-        btSerial.print(lastStopMS) ;
-        btSerial.println(" sec") ;
+        last_run_sec = pump.getTimeSinceLastStopSec() ;
+        btSerial.print(last_run_sec / 86400) ;
+        btSerial.print(" days, ") ;
+        btSerial.print( (last_run_sec % 86400) / 3600 ) ;
+        btSerial.print(" hours, ") ;
+        btSerial.print( ((last_run_sec % 86400) % 3600 ) / 60) ;
+        btSerial.println(" min") ;
+        
         if (pump.isPumpRunning())
           btSerial.println("*** Pump is running ***") ;  
+
         if (pump.isTimeoutFlagSet())
           btSerial.println("*** Pump timeout. Refill reservoir and reset ***") ;  
-        if (lastStopMS < POST_TRIGGER_PAUSE_SEC ) {
-          btSerial.print("*** Moisture sensor offline for ") ;      
-          btSerial.print (POST_TRIGGER_PAUSE_SEC - lastStopMS) ;
-          btSerial.println (" more sec ***") ;
+        
+        if (last_run_sec < POST_TRIGGER_PAUSE_SEC ) {
+          btSerial.print("*** Moisture sensor checking offline for ") ;      
+          btSerial.print (POST_TRIGGER_PAUSE_SEC - last_run_sec) ;
+          btSerial.println (" more seconds ***") ;
         }
         btSerial.println("----------------------") ;
        break ;
